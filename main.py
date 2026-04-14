@@ -1,23 +1,87 @@
 import logging
+import os
+import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from models import EventCreate, ProcessEvent
 
 DATABASE_URL = "sqlite:///./app.db"
 
-# check_same_thread=False allows SQLAlchemy sessions across FastAPI worker threads.
+# check_same_thread=False allows S  QLAlchemy sessions across FastAPI worker threads.
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 logger = logging.getLogger("process-events")
+
+STEP_SEQUENCE = [
+    step.strip()
+    for step in os.getenv("STEP_SEQUENCE", "STEP-ALPHA,STEP-BETA,STEP-GAMMA").split(",")
+    if step.strip()
+]
+STEP_INDEX_BY_ID = {step_id: index for index, step_id in enumerate(STEP_SEQUENCE)}
+
+
+def _state_for_step_index(step_index: int) -> str:
+    if step_index == len(STEP_SEQUENCE) - 1:
+        return "COMPLETE"
+    return f"AT_{STEP_SEQUENCE[step_index]}"
+
+
+def _existing_step_ids(session: Session, unit_id: str) -> set[str]:
+    query = select(ProcessEvent.step_id).where(ProcessEvent.unit_id == unit_id)
+    return set(session.exec(query).all())
+
+
+def _state_for_unit_steps(step_ids: set[str]) -> str:
+    if all(step_id in step_ids for step_id in STEP_SEQUENCE):
+        return "COMPLETE"
+
+    highest_contiguous_index = -1
+    for index, step_id in enumerate(STEP_SEQUENCE):
+        if step_id in step_ids:
+            highest_contiguous_index = index
+            continue
+        break
+
+    if highest_contiguous_index < 0:
+        return "AT_START"
+
+    return _state_for_step_index(highest_contiguous_index)
+
+
+def _state_after_accepting_step(session: Session, unit_id: str, incoming_step_id: str) -> str:
+    step_ids = _existing_step_ids(session, unit_id)
+    step_ids.add(incoming_step_id)
+    return _state_for_unit_steps(step_ids)
+
+
+def _ensure_sqlite_columns() -> None:
+    db_path = "app.db"
+    if not os.path.exists(db_path):
+        return
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(process_event)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        if "step_index" not in existing_columns:
+            cursor.execute("ALTER TABLE process_event ADD COLUMN step_index INTEGER DEFAULT 0")
+
+        if "unit_state" not in existing_columns:
+            cursor.execute("ALTER TABLE process_event ADD COLUMN unit_state TEXT DEFAULT 'AT_START'")
+
+        conn.commit()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     SQLModel.metadata.create_all(engine)
+    _ensure_sqlite_columns()
     yield
 
 
@@ -31,7 +95,36 @@ def get_session():
 
 @app.post("/api/events", status_code=status.HTTP_200_OK)
 def create_event(payload: EventCreate, session: Session = Depends(get_session)):
-    event = ProcessEvent(**payload.model_dump())
+    step_index = STEP_INDEX_BY_ID.get(payload.step_id)
+    if step_index is None:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "status": "invalid_step",
+                "known_steps": STEP_SEQUENCE,
+            },
+        )
+
+    existing_event = session.exec(
+        select(ProcessEvent.id).where(
+            ProcessEvent.unit_id == payload.unit_id,
+            ProcessEvent.step_id == payload.step_id,
+        )
+    ).first()
+    if existing_event is not None:
+        logger.info(
+            "Duplicate process event ignored",
+            extra={"unit_id": payload.unit_id, "step_id": payload.step_id},
+        )
+        return {"status": "duplicate_ignored"}
+
+    next_state = _state_after_accepting_step(session, payload.unit_id, payload.step_id)
+
+    event = ProcessEvent(
+        **payload.model_dump(),
+        step_index=step_index,
+        unit_state=next_state,
+    )
     session.add(event)
 
     try:
