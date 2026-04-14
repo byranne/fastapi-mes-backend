@@ -1,6 +1,5 @@
 import logging
 import os
-import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, status
@@ -58,31 +57,10 @@ def _state_after_accepting_step(session: Session, unit_id: str, incoming_step_id
     step_ids.add(incoming_step_id)
     return _state_for_unit_steps(step_ids)
 
-#checks existing table and adds missing columns to database given that a database already exists + updates are made to the model
-def _ensure_sqlite_columns() -> None:
-    db_path = "app.db"
-    if not os.path.exists(db_path):
-        return
-
-    with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(process_event)")
-        existing_columns = {row[1] for row in cursor.fetchall()}
-
-        if "step_index" not in existing_columns:
-            cursor.execute("ALTER TABLE process_event ADD COLUMN step_index INTEGER DEFAULT 0")
-
-        if "unit_state" not in existing_columns:
-            cursor.execute("ALTER TABLE process_event ADD COLUMN unit_state TEXT DEFAULT 'AT_START'")
-
-        conn.commit()
-
-
 # startup routine
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     SQLModel.metadata.create_all(engine)
-    _ensure_sqlite_columns()
     yield
 
 
@@ -106,20 +84,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
                 "known_steps": STEP_SEQUENCE,
             },
         )
-    # checks to see if unit_id and step_id exist already in database
-    existing_event = session.exec(
-        select(ProcessEvent.id).where(
-            ProcessEvent.unit_id == payload.unit_id,
-            ProcessEvent.step_id == payload.step_id,
-        )
-    ).first()
-    if existing_event is not None:
-        logger.info(
-            "Duplicate process event ignored",
-            extra={"unit_id": payload.unit_id, "step_id": payload.step_id},
-        )
-        return {"status": "duplicate_ignored"}
-
+    
     # processes incoming entry by calcuating next state
     next_state = _state_after_accepting_step(session, payload.unit_id, payload.step_id)
 
