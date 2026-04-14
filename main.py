@@ -24,18 +24,18 @@ STEP_SEQUENCE = [
 ]
 STEP_INDEX_BY_ID = {step_id: index for index, step_id in enumerate(STEP_SEQUENCE)}
 
-
+#input step_index output current step/machine
 def _state_for_step_index(step_index: int) -> str:
     if step_index == len(STEP_SEQUENCE) - 1:
         return "COMPLETE"
     return f"AT_{STEP_SEQUENCE[step_index]}"
 
-
+#input current SQL session and unit_id and output collects all step id values into a set
 def _existing_step_ids(session: Session, unit_id: str) -> set[str]:
     query = select(ProcessEvent.step_id).where(ProcessEvent.unit_id == unit_id)
     return set(session.exec(query).all())
 
-
+#input step a set of all step id's and return 
 def _state_for_unit_steps(step_ids: set[str]) -> str:
     if all(step_id in step_ids for step_id in STEP_SEQUENCE):
         return "COMPLETE"
@@ -52,13 +52,13 @@ def _state_for_unit_steps(step_ids: set[str]) -> str:
 
     return _state_for_step_index(highest_contiguous_index)
 
-
+#input SQL session, unit_id, incoming_step_id -> computes/returns following step
 def _state_after_accepting_step(session: Session, unit_id: str, incoming_step_id: str) -> str:
     step_ids = _existing_step_ids(session, unit_id)
     step_ids.add(incoming_step_id)
     return _state_for_unit_steps(step_ids)
 
-
+#checks existing table and adds missing columns to database given that a database already exists + updates are made to the model
 def _ensure_sqlite_columns() -> None:
     db_path = "app.db"
     if not os.path.exists(db_path):
@@ -78,6 +78,7 @@ def _ensure_sqlite_columns() -> None:
         conn.commit()
 
 
+# startup routine
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     SQLModel.metadata.create_all(engine)
@@ -87,14 +88,15 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
+# opens connection to SQLite(session)
 def get_session():
     with Session(engine) as session:
         yield session
 
-
+#listens for data coming into "/api/events"
 @app.post("/api/events", status_code=status.HTTP_200_OK)
 def create_event(payload: EventCreate, session: Session = Depends(get_session)):
+    #validates if a certain step_id is valid within STEPSEQUENCE
     step_index = STEP_INDEX_BY_ID.get(payload.step_id)
     if step_index is None:
         return JSONResponse(
@@ -104,7 +106,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
                 "known_steps": STEP_SEQUENCE,
             },
         )
-
+    # checks to see if unit_id and step_id exist already in database
     existing_event = session.exec(
         select(ProcessEvent.id).where(
             ProcessEvent.unit_id == payload.unit_id,
@@ -118,6 +120,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         )
         return {"status": "duplicate_ignored"}
 
+    # processes incoming entry by calcuating next state
     next_state = _state_after_accepting_step(session, payload.unit_id, payload.step_id)
 
     event = ProcessEvent(
@@ -127,6 +130,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
     )
     session.add(event)
 
+    # Tries to write to database with duplicate validation(IntegrityError) in the event of double write
     try:
         session.commit()
         return {"status": "saved"}
@@ -136,5 +140,4 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
             "Duplicate process event ignored",
             extra={"unit_id": payload.unit_id, "step_id": payload.step_id},
         )
-        # Return 200 so stations stop retrying duplicate deliveries.
         return {"status": "duplicate_ignored"}
