@@ -4,7 +4,7 @@
 
 This project is a data-driven MES manufacturing line backend system.
 
-Simulated manufactoring stations publish events to backend which stores them in a local database. Handles retries, duplicates, and out-of-order entry arrival.
+Simulated manufactoring stations send data entries to backend to store in a local database. Handles retries, duplicates, and out-of-order entry arrival.
 
 This implemenation is particularly focused in handling:
 - duplicate events under concurrency
@@ -141,23 +141,13 @@ Covered scenarios (`test_simulate_stations.py`):
 - delayed replay from local station buffer
 - concurrent different steps for the same unit
 
-## Conclusions
+## Reflections & Conclusions
 
-### explicit trade-offs
+### Hardest Problems
 
-## Hard Problems and Decisions
+### Key Architectual Choices & Trade-offs 
 
-### Hardest problems
-
-
-### Chosen approach
-
-
-### Explicitly not solved in this scope
-
-
-## Future Improvements
-
+### Out-of-Scope & Future Improvements
 
 ## Project Files
 
