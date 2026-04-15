@@ -4,9 +4,9 @@
 
 This project is a data-driven MES manufacturing line backend system.
 
-Simulated manufactoring stations send data entries to backend to store in a local database. Handles retries, duplicates, and out-of-order entry arrival.
+Simulated manufacturing stations send data entries to the backend to store in a local database. Handles retries, duplicates, and out-of-order entry arrival.
 
-This implemenation is particularly focused in handling:
+This implementation is particularly focused on handling:
 - duplicate events under concurrency
 - preserving accepted events across system restarts
 - maintaining event progression tracking even when events arrive out-of-order
@@ -47,7 +47,7 @@ Event table enforces a uniqueness constraint:
 
 - `UNIQUE(unit_id, step_id)`
 
-The API perfroms a database lookup on incoming request to ensure on duplicate entries and handles race conditions by catching 'IntegrityError' on database commit.
+The API performs a database lookup on incoming requests to ensure duplicate entries are handled and manages race conditions by catching `IntegrityError` on database commit.
 
 This approach prevents identical events from clogging up the database and deals with concurrent collision conflicts.
 
@@ -145,9 +145,51 @@ Covered scenarios (`test_simulate_stations.py`):
 
 ### Hardest Problems
 
-### Key Architectual Choices & Trade-offs 
+For me, the most challenging part of this project was visualizing my system in its operational environment and considering where things go wrong.
+
+In designing this, I took a very step-by-step approach, meaning I tackled problems one by one as they came up and tried to break up the problem. At first, my main focus and challenge was implementing uniqueness. My first design involved a system where I would have some existing database that I would check before every insert to make sure there were no duplicates.
+
+I learned that this implementation failed under concurrent load. Duplicates could bypass the check if all are added at the exact same time. The first problem I struggled with was finding a way to maintain unique entries in a way that supports concurrent payloads. After further documentation deep dives, I learned it was possible to deal with uniqueness at the database level and by using `IntegrityError` (more on this in the key architectural choices section).
+
+Another hard problem was event tracking and out-of-order entries. At first, I approached event tracking naively. My implementation ensured event order by requiring the previous event to already exist in the database for a new step to be registered. I later considered that in the operational environment there would be times where stations' communication to the server is buffered, leading to out-of-order events, which is another constraint I failed to consider in my first design.
+
+### Key Architectural Choices & Trade-offs 
+
+1. Database-enforced idempotency (uniqueness) (`UNIQUE(unit_id, step_id)`)
+	Benefit: deals with concurrent duplication
+	Trade-off: Database cannot be updated and is write only
+
+2. Accepting out-of-order events (no strict sequencing requirement)
+	Benefit: tolerant of network delays and station buffering/replay, which reduces operational brittleness.
+	Trade-off: Implementation is harder to write and maintain. Developers have to account for additional behaviors, such as what to do when a future event is waiting for a prior event, or what if it doesn't show up.
+	
+3. Some columns contain data "snapshots" (`unit_state`, `step_index`)
+	Benefit: each row is self-describing and easier to audit/debug.
+	Trade-off: stored state is a snapshot in time, so if state rules change later (for example, step-sequence changes), historical interpretation may require backfill.
+
+4. SQLite database
+	Benefit: fast local setup, durable storage, and easy inspection.
+	Trade-off: not representative of production environments with multiple instances, heavier concurrency, migrations, backups, and operational tooling.
+
 
 ### Out-of-Scope & Future Improvements
+
+This project intentionally focuses on the ingestion core (idempotency and ordering tolerance) and leaves production hardening out of scope.
+
+Out-of-scope areas in the current implementation:
+
+- User logins, security, and permissions.
+- Tools for automatically updating the database structure.
+- Error tracking and performance dashboards.
+- Setup for running the app across multiple servers.
+
+If extending this system beyond the take-home, the highest-value improvements would be:
+
+1. Move to PostgreSQL - for better concurrency load and traffic
+2. Add Database Migrations - find a way to add or change tables without losing data
+3. Better logging and tracking - need a simpler way to track stuck requests and troubleshoot
+4. Dashboard - better item access at a glance
+
 
 ## Project Files
 

@@ -11,7 +11,7 @@ from models import EventCreate, ProcessEvent
 
 DATABASE_URL = "sqlite:///./app.db"
 
-# check_same_thread=False allows S  QLAlchemy sessions across FastAPI worker threads.
+# check_same_thread=False allows SQLAlchemy sessions across FastAPI worker threads.
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 logger = logging.getLogger("process-events")
@@ -23,18 +23,18 @@ STEP_SEQUENCE = [
 ]
 STEP_INDEX_BY_ID = {step_id: index for index, step_id in enumerate(STEP_SEQUENCE)}
 
-#input step_index output current step/machine
+#input step_index -> current "AT_<currentstep>"
 def _state_for_step_index(step_index: int) -> str:
     if step_index == len(STEP_SEQUENCE) - 1:
         return "COMPLETE"
     return f"AT_{STEP_SEQUENCE[step_index]}"
 
-#input current SQL session and unit_id and output collects all step id values into a set
+#input current SQL session and unit_id -> collects all step id values into a set of all step ids
 def _existing_step_ids(session: Session, unit_id: str) -> set[str]:
     query = select(ProcessEvent.step_id).where(ProcessEvent.unit_id == unit_id)
     return set(session.exec(query).all())
 
-#input step a set of all step id's and return 
+#input set of step ids -> returns unit state from contiguous step progression
 def _state_for_unit_steps(step_ids: set[str]) -> str:
     if all(step_id in step_ids for step_id in STEP_SEQUENCE):
         return "COMPLETE"

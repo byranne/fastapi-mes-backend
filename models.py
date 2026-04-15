@@ -22,6 +22,7 @@ class ProcessEvent(SQLModel, table=True):
     step_index: int
     unit_state: str
 
+
 #inherits from pydantic's BaseModel for data validation.
 class EventCreate(BaseModel):
     event_id: str
