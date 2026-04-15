@@ -156,28 +156,20 @@ Another hard problem was event tracking and out-of-order entries. At first, I ap
 ### Key Architectural Choices & Trade-offs 
 
 1. Database-enforced idempotency (uniqueness) (`UNIQUE(unit_id, step_id)`)
-
-Benefit: deals with concurrent duplication
-
-Trade-off: Database cannot be updated and is write only
+   Benefit: deals with concurrent duplication  
+   Trade-off: Database cannot be updated and is write only
 
 2. Accepting out-of-order events (no strict sequencing requirement)
-	
-Benefit: tolerant of network delays and station buffering/replay, which reduces operational brittleness.
+   Benefit: tolerant of network delays and station buffering/replay, which reduces operational brittleness.  
+   Trade-off: Implementation is harder to write and maintain. Developers have to account for additional behaviors, such as what to do when a future event is waiting for a prior event, or what if it doesn't show up.
 
-Trade-off: Implementation is harder to write and maintain. Developers have to account for additional behaviors, such as what to do when a future event is waiting for a prior event, or what if it doesn't show up.
-	
 3. Some columns contain data "snapshots" (`unit_state`, `step_index`)
-	
-Benefit: each row is self-describing and easier to audit/debug.
-
-Trade-off: stored state is a snapshot in time, so if state rules change later (for example, step-sequence changes), historical interpretation may require backfill.
+   Benefit: each row is self-describing and easier to audit/debug.  
+   Trade-off: stored state is a snapshot in time, so if state rules change later (for example, step-sequence changes), historical interpretation may require backfill.
 
 4. SQLite database
-
-Benefit: fast local setup, durable storage, and easy inspection.
-
-Trade-off: not representative of production environments with multiple instances, heavier concurrency, migrations, backups, and operational tooling.
+   Benefit: fast local setup, durable storage, and easy inspection.  
+   Trade-off: not representative of production environments with multiple instances, heavier concurrency, migrations, backups, and operational tooling.
 
 
 ### Out-of-Scope & Future Improvements
